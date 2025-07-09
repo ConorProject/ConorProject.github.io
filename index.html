@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>TrueCost Mini App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Telegram Web App script -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a202c; /* gray-900 */
+            color: white;
+        }
+        #camera-feed {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: -1;
+            opacity: 0.5;
+        }
+        .backdrop-blur-custom {
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        .text-shadow {
+            text-shadow: 0px 2px 4px rgba(0,0,0,0.4);
+        }
+        .scan-box {
+            border: 2px dashed rgba(255, 255, 255, 0.6);
+            background: rgba(0, 0, 0, 0.1);
+            animation: pulse 4s infinite;
+            cursor: pointer;
+        }
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 255, 255, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+        }
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 2s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .switch {
+          position: relative;
+          display: inline-block;
+          width: 50px;
+          height: 28px;
+        }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+          position: absolute;
+          cursor: pointer;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: #4a5568;
+          transition: .4s;
+          border-radius: 28px;
+        }
+        .slider:before {
+          position: absolute;
+          content: "";
+          height: 20px;
+          width: 20px;
+          left: 4px;
+          bottom: 4px;
+          background-color: white;
+          transition: .4s;
+          border-radius: 50%;
+        }
+        input:checked + .slider { background-color: #48bb78; }
+        input:checked + .slider:before { transform: translateX(22px); }
+        .progress-bar-bg { background-color: #4a5568; }
+        .progress-bar-fg { transition: width 0.5s ease-in-out; }
+    </style>
+</head>
+<body class="w-screen h-screen overflow-hidden">
+    <video id="camera-feed" autoplay playsinline></video>
+    
+    <!-- Main container -->
+    <div class="relative w-full h-full max-w-md mx-auto flex flex-col justify-between">
+
+        <!-- Top Bar -->
+        <header class="flex justify-between items-center p-4 text-white">
+            <button id="settings-btn" class="p-2 rounded-full bg-black/20 backdrop-blur-custom">
+                <i data-lucide="settings-2" class="w-6 h-6"></i>
+            </button>
+            <div class="flex items-center space-x-2 p-2 rounded-full bg-black/20 backdrop-blur-custom">
+                <span id="from-currency" class="font-semibold">JPY</span>
+                <i data-lucide="arrow-right-left" class="w-5 h-5 opacity-70"></i>
+                <span id="to-currency" class="font-semibold">USD</span>
+            </div>
+            <button class="p-2 rounded-full bg-black/20 backdrop-blur-custom">
+                <i data-lucide="history" class="w-6 h-6"></i>
+            </button>
+        </header>
+
+        <!-- Scanner View -->
+        <main class="flex-grow flex items-center justify-center">
+            <div id="scan-button" class="w-64 h-32 scan-box rounded-lg flex items-center justify-center">
+                <span id="scanned-price" class="text-white text-lg font-bold text-shadow">¥2,500</span>
+            </div>
+        </main>
+
+        <!-- Bottom Sheet -->
+        <footer id="results-sheet" class="bg-gray-800/80 backdrop-blur-custom text-white rounded-t-2xl p-4 shadow-2xl transform translate-y-full transition-transform duration-500 ease-in-out">
+            <div class="w-10 h-1.5 bg-gray-500 rounded-full mx-auto mb-4"></div>
+
+            <div id="loader" class="hidden justify-center items-center h-48">
+                <div class="loader"></div>
+            </div>
+
+            <div id="results-content" class="hidden">
+                <!-- Conversion Result -->
+                <div class="text-center mb-4">
+                    <p class="text-sm text-gray-300">Converted Price</p>
+                    <h1 id="converted-price" class="text-5xl font-bold tracking-tight text-shadow">$0.00</h1>
+                </div>
+                
+                <!-- Tax and Tip Toggles -->
+                <div class="space-y-3 mb-4 bg-gray-900/50 p-3 rounded-lg">
+                    <div class="flex justify-between items-center">
+                        <label for="tax-toggle" class="font-medium">Tax (<span id="tax-percent-label">10</span>%)</label>
+                        <label class="switch"><input type="checkbox" id="tax-toggle"><span class="slider"></span></label>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <label for="tip-toggle" class="font-medium">Tip (<span id="tip-percent-label">18</span>%)</label>
+                        <label class="switch"><input type="checkbox" id="tip-toggle"><span class="slider"></span></label>
+                    </div>
+                </div>
+
+                <!-- Grand Total -->
+                <div class="bg-green-600/20 border border-green-500 rounded-lg p-3 mb-4">
+                    <div class="text-center">
+                        <p class="text-sm text-green-200">Grand Total (incl. <span id="fee-percent-label">3</span>% fee)</p>
+                        <p id="grand-total-price" class="text-3xl font-bold">$0.00</p>
+                    </div>
+                </div>
+                
+                <!-- Budget Tracker -->
+                <div class="bg-gray-900/50 p-3 rounded-lg">
+                    <h3 class="font-semibold mb-2 text-center">Trip Budget</h3>
+                    <div class="w-full progress-bar-bg rounded-full h-2.5">
+                        <div id="progress-bar" class="bg-blue-500 h-2.5 rounded-full progress-bar-fg" style="width: 0%"></div>
+                    </div>
+                    <div class="flex justify-between text-sm mt-1">
+                        <span id="spent-today-label">$0 Spent</span>
+                        <span id="budget-remaining-label">$1500 Remaining</span>
+                    </div>
+                </div>
+            </div>
+        </footer>
+    </div>
+    
+    <!-- Settings Panel -->
+    <div id="settings-panel" class="absolute top-0 left-0 w-full h-full bg-gray-900 p-4 text-white transform -translate-x-full transition-transform duration-300 ease-in-out z-20 overflow-y-auto">
+        <div class="flex justify-between items-center mb-8">
+            <h2 class="text-2xl font-bold">Settings & Budget</h2>
+            <button id="close-settings-btn" class="p-2"><i data-lucide="x" class="w-8 h-8"></i></button>
+        </div>
+        <div class="space-y-4">
+            <div>
+                <label for="trip-budget-input" class="block font-medium">Total Trip Budget ($)</label>
+                <p class="text-sm text-gray-400 mb-1">Set a total budget for your entire trip.</p>
+                <input type="number" id="trip-budget-input" class="w-full p-2 rounded bg-gray-700 border border-gray-600" value="1500">
+            </div>
+            <div>
+                <label for="card-fee-input" class="block font-medium">Default Card Fee (%)</label>
+                <p class="text-sm text-gray-400 mb-1">Your card's foreign transaction fee (e.g., 3%).</p>
+                <input type="number" id="card-fee-input" class="w-full p-2 rounded bg-gray-700 border border-gray-600" value="3">
+            </div>
+            <div>
+                <label for="tax-rate-input" class="block font-medium">Default Tax Rate (%)</label>
+                <p class="text-sm text-gray-400 mb-1">For countries where tax isn't on the price tag.</p>
+                <input type="number" id="tax-rate-input" class="w-full p-2 rounded bg-gray-700 border border-gray-600" value="10">
+            </div>
+            <div>
+                <label for="tip-rate-input" class="block font-medium">Default Tip Rate (%)</label>
+                <p class="text-sm text-gray-400 mb-1">A starting point for calculating restaurant tips.</p>
+                <input type="number" id="tip-rate-input" class="w-full p-2 rounded bg-gray-700 border border-gray-600" value="18">
+            </div>
+        </div>
+        <div class="mt-8 space-y-4">
+             <div>
+                <button id="export-btn" class="w-full py-3 bg-blue-600 rounded-lg font-semibold hover:bg-blue-500 transition-colors flex items-center justify-center space-x-2">
+                    <i data-lucide="download" class="w-5 h-5"></i>
+                    <span>Export Purchase Log</span>
+                </button>
+                <p class="text-sm text-gray-400 mt-1 text-center">Save your logged purchases to a CSV file.</p>
+            </div>
+            <div>
+                <button id="reset-budget-btn" class="w-full py-3 bg-red-700 rounded-lg font-semibold hover:bg-red-600 transition-colors flex items-center justify-center space-x-2">
+                    <i data-lucide="trash-2" class="w-5 h-5"></i>
+                    <span>Reset Trip Log</span>
+                </button>
+                <p class="text-sm text-gray-400 mt-1 text-center">Clear all logged items and reset budget.</p>
+            </div>
+        </div>
+        <button id="save-settings-btn" class="w-full mt-8 py-3 bg-indigo-600 rounded-lg font-bold hover:bg-indigo-500 transition-colors">Save & Close</button>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+
+        // --- Element Selectors ---
+        const cameraFeed = document.getElementById('camera-feed');
+        const scanButton = document.getElementById('scan-button');
+        const resultsSheet = document.getElementById('results-sheet');
+        const loader = document.getElementById('loader');
+        const resultsContent = document.getElementById('results-content');
+        const convertedPriceEl = document.getElementById('converted-price');
+        const grandTotalPriceEl = document.getElementById('grand-total-price');
+        const taxToggle = document.getElementById('tax-toggle');
+        const tipToggle = document.getElementById('tip-toggle');
+        const taxPercentLabel = document.getElementById('tax-percent-label');
+        const tipPercentLabel = document.getElementById('tip-percent-label');
+        const feePercentLabel = document.getElementById('fee-percent-label');
+        
+        // Budget & Export Elements
+        const progressBar = document.getElementById('progress-bar');
+        const spentTodayLabel = document.getElementById('spent-today-label');
+        const budgetRemainingLabel = document.getElementById('budget-remaining-label');
+        const exportBtn = document.getElementById('export-btn');
+        const resetBudgetBtn = document.getElementById('reset-budget-btn');
+
+        // Settings Panel Elements
+        const settingsBtn = document.getElementById('settings-btn');
+        const closeSettingsBtn = document.getElementById('close-settings-btn');
+        const saveSettingsBtn = document.getElementById('save-settings-btn');
+        const settingsPanel = document.getElementById('settings-panel');
+        const cardFeeInput = document.getElementById('card-fee-input');
+        const taxRateInput = document.getElementById('tax-rate-input');
+        const tipRateInput = document.getElementById('tip-rate-input');
+        const tripBudgetInput = document.getElementById('trip-budget-input');
+
+        // --- State Variables ---
+        let currentConvertedPrice = 0;
+        let currentGrandTotal = 0;
+        let prefs = {
+            cardFee: 0.03,
+            taxRate: 10,
+            tipRate: 18,
+            tripBudget: 1500,
+            purchaseLog: []
+        };
+
+        // --- Camera Setup ---
+        async function setupCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                cameraFeed.srcObject = stream;
+            } catch (err) {
+                console.error("Camera access denied:", err);
+                document.body.style.backgroundColor = '#1a202c';
+            }
+        }
+
+        // --- Calculation & UI Update Logic ---
+        async function getConversionRate(from, to) {
+            const apiUrl = `https://api.exchangerate-api.com/v4/latest/${from}`;
+            try {
+                const response = await fetch(apiUrl);
+                const data = await response.json();
+                return data.rates[to] || 0.0067;
+            } catch (error) {
+                console.error("API Error:", error);
+                return 0.0067;
+            }
+        }
+
+        function calculateGrandTotal() {
+            const baseWithFee = currentConvertedPrice * (1 + prefs.cardFee);
+            const taxAmount = taxToggle.checked ? currentConvertedPrice * (prefs.taxRate / 100) : 0;
+            const tipAmount = tipToggle.checked ? currentConvertedPrice * (prefs.tipRate / 100) : 0;
+            currentGrandTotal = baseWithFee + taxAmount + tipAmount;
+            grandTotalPriceEl.textContent = `$${currentGrandTotal.toFixed(2)}`;
+            tg.MainButton.setText(`Log Purchase ($${currentGrandTotal.toFixed(2)})`);
+        }
+        
+        function updateBudgetDisplay() {
+            const spent = prefs.purchaseLog.reduce((total, item) => total + item.amount, 0);
+            const budget = prefs.tripBudget;
+            const remaining = budget - spent;
+            const progress = budget > 0 ? (spent / budget) * 100 : 0;
+
+            progressBar.style.width = `${Math.min(progress, 100)}%`;
+            spentTodayLabel.textContent = `$${spent.toFixed(2)} Spent`;
+            budgetRemainingLabel.textContent = remaining >= 0 ? `$${remaining.toFixed(2)} Remaining` : `$${Math.abs(remaining).toFixed(2)} Over`;
+            
+            progressBar.classList.toggle('bg-red-500', progress > 100);
+            progressBar.classList.toggle('bg-yellow-500', progress > 75 && progress <= 100);
+            progressBar.classList.toggle('bg-blue-500', progress <= 75);
+        }
+
+        async function handleScan() {
+            resultsSheet.style.transform = 'translateY(0)';
+            loader.classList.remove('hidden');
+            loader.classList.add('flex');
+            resultsContent.classList.add('hidden');
+            tg.MainButton.hide();
+            
+            taxToggle.checked = false;
+            tipToggle.checked = false;
+
+            const priceText = document.getElementById('scanned-price').textContent;
+            const basePrice = parseFloat(priceText.replace(/[^0-9.-]+/g,""));
+            const rate = await getConversionRate('JPY', 'USD');
+            
+            currentConvertedPrice = basePrice * rate;
+            convertedPriceEl.textContent = `$${currentConvertedPrice.toFixed(2)}`;
+            
+            calculateGrandTotal();
+            updateBudgetDisplay();
+
+            loader.classList.add('hidden');
+            loader.classList.remove('flex');
+            resultsContent.classList.remove('hidden');
+            tg.MainButton.show();
+        }
+        
+        function logPurchase() {
+            const newPurchase = {
+                timestamp: new Date().toISOString(),
+                description: `Scanned Item (${document.getElementById('scanned-price').textContent})`,
+                amount: currentGrandTotal
+            };
+            prefs.purchaseLog.push(newPurchase);
+            localStorage.setItem('trueCostPrefs', JSON.stringify(prefs));
+            updateBudgetDisplay();
+            
+            tg.HapticFeedback.notificationOccurred('success');
+            tg.MainButton.setText('Logged!');
+            setTimeout(() => {
+                resultsSheet.style.transform = 'translateY(100%)';
+                tg.MainButton.hide();
+            }, 1000);
+        }
+        
+        // --- Settings & Export Logic ---
+        function loadPreferences() {
+            const savedPrefs = localStorage.getItem('trueCostPrefs');
+            if (savedPrefs) {
+                prefs = JSON.parse(savedPrefs);
+                if (!prefs.purchaseLog) prefs.purchaseLog = []; 
+            }
+            tripBudgetInput.value = prefs.tripBudget;
+            cardFeeInput.value = prefs.cardFee * 100;
+            taxRateInput.value = prefs.taxRate;
+            tipRateInput.value = prefs.tipRate;
+            
+            taxPercentLabel.textContent = prefs.taxRate;
+            tipPercentLabel.textContent = prefs.tipRate;
+            feePercentLabel.textContent = (prefs.cardFee * 100).toFixed(1);
+            
+            updateBudgetDisplay();
+        }
+
+        function savePreferences() {
+            prefs.tripBudget = parseFloat(tripBudgetInput.value) || 0;
+            prefs.cardFee = parseFloat(cardFeeInput.value) / 100 || 0;
+            prefs.taxRate = parseFloat(taxRateInput.value) || 0;
+            prefs.tipRate = parseFloat(tipRateInput.value) || 0;
+            
+            localStorage.setItem('trueCostPrefs', JSON.stringify(prefs));
+            loadPreferences();
+            settingsPanel.style.transform = 'translateX(-100%)';
+            tg.HapticFeedback.notificationOccurred('success');
+        }
+
+        function exportToCSV() {
+            if (prefs.purchaseLog.length === 0) {
+                tg.showAlert("No purchases logged to export.");
+                return;
+            }
+            let csvContent = "Timestamp,Description,Amount (USD)\r\n";
+            prefs.purchaseLog.forEach(item => {
+                const row = `${item.timestamp},"${item.description}",${item.amount.toFixed(2)}`;
+                csvContent += row + "\r\n";
+            });
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8,' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.setAttribute("href", url);
+            link.setAttribute("download", "TrueCost_Log.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+        
+        function resetBudget() {
+            tg.showConfirm("Are you sure you want to reset your trip log? This cannot be undone.", (ok) => {
+                if (ok) {
+                    prefs.purchaseLog = [];
+                    localStorage.setItem('trueCostPrefs', JSON.stringify(prefs));
+                    loadPreferences();
+                    settingsPanel.style.transform = 'translateX(-100%)';
+                    tg.HapticFeedback.notificationOccurred('success');
+                }
+            });
+        }
+
+        // --- Event Listeners & Telegram Setup ---
+        tg.onEvent('mainButtonClicked', logPurchase);
+
+        scanButton.addEventListener('click', handleScan);
+        taxToggle.addEventListener('change', calculateGrandTotal);
+        tipToggle.addEventListener('change', calculateGrandTotal);
+        exportBtn.addEventListener('click', exportToCSV);
+        resetBudgetBtn.addEventListener('click', resetBudget);
+        
+        settingsBtn.addEventListener('click', () => {
+            settingsPanel.style.transform = 'translateX(0)';
+        });
+        closeSettingsBtn.addEventListener('click', () => {
+            settingsPanel.style.transform = 'translateX(-100%)';
+        });
+        saveSettingsBtn.addEventListener('click', savePreferences);
+        
+        // --- Initial Load ---
+        window.addEventListener('load', () => {
+            tg.ready();
+            tg.expand();
+            
+            // Configure Main Button
+            tg.MainButton.textColor = '#FFFFFF';
+            tg.MainButton.color = '#26A5E4';
+            tg.MainButton.hide();
+
+            setupCamera();
+            loadPreferences();
+            lucide.createIcons();
+        });
+
+    </script>
+</body>
+</html>

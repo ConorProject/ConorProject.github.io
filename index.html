@@ -9,6 +9,8 @@
     <script src="https://unpkg.com/lucide@latest"></script>
     <!-- Telegram Web App script -->
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- Tesseract.js for OCR -->
+    <script src='https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js'></script>
     <style>
         body {
             font-family: 'Inter', sans-serif;
@@ -42,6 +44,13 @@
             0% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.4); }
             70% { box-shadow: 0 0 0 10px rgba(255, 255, 255, 0); }
             100% { box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
+        }
+        .loader-container {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
         }
         .loader {
             border: 4px solid #f3f3f3;
@@ -114,7 +123,7 @@
         <!-- Scanner View -->
         <main class="flex-grow flex items-center justify-center">
             <div id="scan-button" class="w-64 h-32 scan-box rounded-lg flex items-center justify-center text-center">
-                <span id="scanned-price" class="text-white text-lg font-bold text-shadow">Tap to Enter Price</span>
+                <span id="scanned-price" class="text-white text-lg font-bold text-shadow">Tap to Scan or Enter Price</span>
             </div>
         </main>
 
@@ -122,8 +131,9 @@
         <footer id="results-sheet" class="bg-gray-800/80 backdrop-blur-custom text-white rounded-t-2xl p-4 shadow-2xl transform translate-y-full transition-transform duration-500 ease-in-out">
             <div class="w-10 h-1.5 bg-gray-500 rounded-full mx-auto mb-4"></div>
 
-            <div id="loader" class="hidden justify-center items-center h-48">
+            <div id="loader" class="hidden loader-container">
                 <div class="loader"></div>
+                <p id="loader-text" class="mt-4 text-gray-400">Fetching rates...</p>
             </div>
 
             <div id="results-content" class="hidden">
@@ -160,13 +170,19 @@
                         <div id="progress-bar" class="bg-blue-500 h-2.5 rounded-full progress-bar-fg" style="width: 0%"></div>
                     </div>
                     <div class="flex justify-between text-sm mt-1">
-                        <span id="spent-today-label">$0 Spent</span>
-                        <span id="budget-remaining-label">$1500 Remaining</span>
+                        <span id="spent-total-label">$0 Spent</span>
+                        <span id="budget-total-remaining-label">$1500 Remaining</span>
+                    </div>
+                    <div id="daily-budget-info" class="text-center text-sm text-gray-400 mt-2">
+                        Today: $0 / $150
                     </div>
                 </div>
             </div>
         </footer>
     </div>
+    
+    <!-- Hidden file input for camera/upload -->
+    <input type="file" id="image-input" accept="image/*" class="hidden">
     
     <!-- Settings Panel -->
     <div id="settings-panel" class="absolute top-0 left-0 w-full h-full bg-gray-900 p-4 text-white transform -translate-x-full transition-transform duration-300 ease-in-out z-20 overflow-y-auto">
@@ -179,6 +195,11 @@
                 <label for="trip-budget-input" class="block font-medium">Total Trip Budget ($)</label>
                 <p class="text-sm text-gray-400 mb-1">Set a total budget for your entire trip.</p>
                 <input type="number" id="trip-budget-input" class="w-full p-2 rounded bg-gray-700 border border-gray-600" value="1500">
+            </div>
+            <div>
+                <label for="trip-length-input" class="block font-medium">Trip Length (days)</label>
+                <p class="text-sm text-gray-400 mb-1">Used to calculate your suggested daily budget.</p>
+                <input type="number" id="trip-length-input" class="w-full p-2 rounded bg-gray-700 border border-gray-600" value="10">
             </div>
             <div>
                 <label for="card-fee-input" class="block font-medium">Default Card Fee (%)</label>
@@ -221,8 +242,10 @@
         // --- Element Selectors ---
         const cameraFeed = document.getElementById('camera-feed');
         const scanButton = document.getElementById('scan-button');
+        const imageInput = document.getElementById('image-input');
         const resultsSheet = document.getElementById('results-sheet');
         const loader = document.getElementById('loader');
+        const loaderText = document.getElementById('loader-text');
         const resultsContent = document.getElementById('results-content');
         const convertedPriceEl = document.getElementById('converted-price');
         const grandTotalPriceEl = document.getElementById('grand-total-price');
@@ -234,8 +257,9 @@
         
         // Budget & Export Elements
         const progressBar = document.getElementById('progress-bar');
-        const spentTodayLabel = document.getElementById('spent-today-label');
-        const budgetRemainingLabel = document.getElementById('budget-remaining-label');
+        const spentTotalLabel = document.getElementById('spent-total-label');
+        const budgetTotalRemainingLabel = document.getElementById('budget-total-remaining-label');
+        const dailyBudgetInfo = document.getElementById('daily-budget-info');
         const exportBtn = document.getElementById('export-btn');
         const resetBudgetBtn = document.getElementById('reset-budget-btn');
 
@@ -248,6 +272,7 @@
         const taxRateInput = document.getElementById('tax-rate-input');
         const tipRateInput = document.getElementById('tip-rate-input');
         const tripBudgetInput = document.getElementById('trip-budget-input');
+        const tripLengthInput = document.getElementById('trip-length-input');
 
         // --- State Variables ---
         let currentConvertedPrice = 0;
@@ -258,6 +283,7 @@
             taxRate: 10,
             tipRate: 18,
             tripBudget: 1500,
+            tripLength: 10,
             purchaseLog: []
         };
 
@@ -272,7 +298,29 @@
             }
         }
 
-        // --- Calculation & UI Update Logic ---
+        // --- OCR & Calculation Logic ---
+        async function performOcr(imageFile) {
+            showLoader('Analyzing photo...');
+            try {
+                const { data: { text } } = await Tesseract.recognize(imageFile, 'eng');
+                const numbers = text.match(/[\d,]+(?:\.\d+)?/g);
+                if (numbers && numbers.length > 0) {
+                    const firstPrice = parseFloat(numbers[0].replace(/,/g, ''));
+                    if (!isNaN(firstPrice)) {
+                        await handleConversion(firstPrice);
+                    } else {
+                        throw new Error('No valid number found');
+                    }
+                } else {
+                    throw new Error('No numbers found in image');
+                }
+            } catch (error) {
+                console.error('OCR Error:', error);
+                tg.showAlert('Could not read a price from the image. Please try again or enter it manually.');
+                hideLoader();
+            }
+        }
+
         async function getConversionRate(from, to) {
             const apiUrl = `https://api.exchangerate-api.com/v4/latest/${from}`;
             try {
@@ -295,30 +343,31 @@
         }
         
         function updateBudgetDisplay() {
-            const spent = prefs.purchaseLog.reduce((total, item) => total + item.amount, 0);
-            const budget = prefs.tripBudget;
-            const remaining = budget - spent;
-            const progress = budget > 0 ? (spent / budget) * 100 : 0;
+            const today = new Date().toISOString().slice(0, 10);
+            const spentToday = prefs.purchaseLog
+                .filter(item => item.timestamp.slice(0, 10) === today)
+                .reduce((total, item) => total + item.amount, 0);
 
-            progressBar.style.width = `${Math.min(progress, 100)}%`;
-            spentTodayLabel.textContent = `$${spent.toFixed(2)} Spent`;
-            budgetRemainingLabel.textContent = remaining >= 0 ? `$${remaining.toFixed(2)} Remaining` : `$${Math.abs(remaining).toFixed(2)} Over`;
+            const spentTotal = prefs.purchaseLog.reduce((total, item) => total + item.amount, 0);
+            const tripBudget = prefs.tripBudget;
+            const dailyBudget = tripBudget > 0 && prefs.tripLength > 0 ? tripBudget / prefs.tripLength : 0;
             
-            progressBar.classList.toggle('bg-red-500', progress > 100);
-            progressBar.classList.toggle('bg-yellow-500', progress > 75 && progress <= 100);
-            progressBar.classList.toggle('bg-blue-500', progress <= 75);
+            const remainingTotal = tripBudget - spentTotal;
+            const progressTotal = tripBudget > 0 ? (spentTotal / tripBudget) * 100 : 0;
+
+            progressBar.style.width = `${Math.min(progressTotal, 100)}%`;
+            spentTotalLabel.textContent = `$${spentTotal.toFixed(2)} Spent`;
+            budgetTotalRemainingLabel.textContent = remainingTotal >= 0 ? `$${remainingTotal.toFixed(2)} Remaining` : `$${Math.abs(remainingTotal).toFixed(2)} Over`;
+            
+            dailyBudgetInfo.textContent = `Today: $${spentToday.toFixed(2)} / $${dailyBudget.toFixed(2)}`;
+
+            progressBar.classList.toggle('bg-red-500', progressTotal > 100);
+            progressBar.classList.toggle('bg-yellow-500', progressTotal > 75 && progressTotal <= 100);
+            progressBar.classList.toggle('bg-blue-500', progressTotal <= 75);
         }
 
-        async function handleScan(price) {
-            resultsSheet.style.transform = 'translateY(0)';
-            loader.classList.remove('hidden');
-            loader.classList.add('flex');
-            resultsContent.classList.add('hidden');
-            tg.MainButton.hide();
-            
-            taxToggle.checked = false;
-            tipToggle.checked = false;
-
+        async function handleConversion(price) {
+            showLoader('Fetching rates...');
             currentOriginalPrice = price;
             const rate = await getConversionRate('JPY', 'USD');
             
@@ -328,8 +377,7 @@
             calculateGrandTotal();
             updateBudgetDisplay();
 
-            loader.classList.add('hidden');
-            loader.classList.remove('flex');
+            hideLoader();
             resultsContent.classList.remove('hidden');
             tg.MainButton.show();
         }
@@ -352,6 +400,19 @@
             }, 1000);
         }
         
+        // --- UI Flow & Helpers ---
+        function showLoader(text) {
+            resultsSheet.style.transform = 'translateY(0)';
+            loaderText.textContent = text;
+            loader.classList.remove('hidden');
+            resultsContent.classList.add('hidden');
+            tg.MainButton.hide();
+        }
+
+        function hideLoader() {
+            loader.classList.add('hidden');
+        }
+
         // --- Settings & Export Logic ---
         function loadPreferences() {
             const savedPrefs = localStorage.getItem('trueCostPrefs');
@@ -360,6 +421,7 @@
                 if (!prefs.purchaseLog) prefs.purchaseLog = []; 
             }
             tripBudgetInput.value = prefs.tripBudget;
+            tripLengthInput.value = prefs.tripLength;
             cardFeeInput.value = prefs.cardFee * 100;
             taxRateInput.value = prefs.taxRate;
             tipRateInput.value = prefs.tipRate;
@@ -373,6 +435,7 @@
 
         function savePreferences() {
             prefs.tripBudget = parseFloat(tripBudgetInput.value) || 0;
+            prefs.tripLength = parseInt(tripLengthInput.value) || 1;
             prefs.cardFee = parseFloat(cardFeeInput.value) / 100 || 0;
             prefs.taxRate = parseFloat(taxRateInput.value) || 0;
             prefs.tipRate = parseFloat(tipRateInput.value) || 0;
@@ -420,22 +483,41 @@
 
         scanButton.addEventListener('click', () => {
             tg.showPopup({
-                title: 'Enter Price',
-                message: 'Enter the price from the item you want to convert.',
+                title: 'Input Method',
+                message: 'How would you like to enter the price?',
                 buttons: [
-                    {id: 'enter', type: 'default', text: 'Convert'},
+                    {id: 'scan', type: 'default', text: '📷 Scan Photo'},
+                    {id: 'manual', type: 'default', text: '⌨️ Enter Manually'},
                     {type: 'cancel'},
                 ]
-            }, (buttonId, data) => {
-                 if (buttonId === 'enter') {
-                    const price = parseFloat(prompt("Enter price:"));
-                    if (!isNaN(price) && price > 0) {
-                        handleScan(price);
-                    } else {
-                        tg.showAlert('Please enter a valid number.');
-                    }
+            }, (buttonId) => {
+                 if (buttonId === 'scan') {
+                    imageInput.click();
+                 } else if (buttonId === 'manual') {
+                    tg.showPopup({
+                        title: 'Enter Price',
+                        message: 'Enter the price from the item you want to convert.',
+                        buttons: [{id: 'enter', type: 'default', text: 'Convert'}, {type: 'cancel'}],
+                        inputs: [{type: 'number', placeholder: 'e.g., 2500'}]
+                    }, (btnId, data) => {
+                        if (btnId === 'enter' && data.input) {
+                            const price = parseFloat(data.input);
+                            if (!isNaN(price) && price > 0) {
+                                handleConversion(price);
+                            } else {
+                                tg.showAlert('Please enter a valid number.');
+                            }
+                        }
+                    });
                  }
             });
+        });
+
+        imageInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                performOcr(file);
+            }
         });
 
         taxToggle.addEventListener('change', calculateGrandTotal);

@@ -113,8 +113,8 @@
 
         <!-- Scanner View -->
         <main class="flex-grow flex items-center justify-center">
-            <div id="scan-button" class="w-64 h-32 scan-box rounded-lg flex items-center justify-center">
-                <span id="scanned-price" class="text-white text-lg font-bold text-shadow">¥2,500</span>
+            <div id="scan-button" class="w-64 h-32 scan-box rounded-lg flex items-center justify-center text-center">
+                <span id="scanned-price" class="text-white text-lg font-bold text-shadow">Tap to Enter Price</span>
             </div>
         </main>
 
@@ -252,6 +252,7 @@
         // --- State Variables ---
         let currentConvertedPrice = 0;
         let currentGrandTotal = 0;
+        let currentOriginalPrice = 0;
         let prefs = {
             cardFee: 0.03,
             taxRate: 10,
@@ -308,7 +309,7 @@
             progressBar.classList.toggle('bg-blue-500', progress <= 75);
         }
 
-        async function handleScan() {
+        async function handleScan(price) {
             resultsSheet.style.transform = 'translateY(0)';
             loader.classList.remove('hidden');
             loader.classList.add('flex');
@@ -318,11 +319,10 @@
             taxToggle.checked = false;
             tipToggle.checked = false;
 
-            const priceText = document.getElementById('scanned-price').textContent;
-            const basePrice = parseFloat(priceText.replace(/[^0-9.-]+/g,""));
+            currentOriginalPrice = price;
             const rate = await getConversionRate('JPY', 'USD');
             
-            currentConvertedPrice = basePrice * rate;
+            currentConvertedPrice = currentOriginalPrice * rate;
             convertedPriceEl.textContent = `$${currentConvertedPrice.toFixed(2)}`;
             
             calculateGrandTotal();
@@ -337,7 +337,7 @@
         function logPurchase() {
             const newPurchase = {
                 timestamp: new Date().toISOString(),
-                description: `Scanned Item (${document.getElementById('scanned-price').textContent})`,
+                description: `Item (${currentOriginalPrice} JPY)`,
                 amount: currentGrandTotal
             };
             prefs.purchaseLog.push(newPurchase);
@@ -418,7 +418,26 @@
         // --- Event Listeners & Telegram Setup ---
         tg.onEvent('mainButtonClicked', logPurchase);
 
-        scanButton.addEventListener('click', handleScan);
+        scanButton.addEventListener('click', () => {
+            tg.showPopup({
+                title: 'Enter Price',
+                message: 'Enter the price from the item you want to convert.',
+                buttons: [
+                    {id: 'enter', type: 'default', text: 'Convert'},
+                    {type: 'cancel'},
+                ]
+            }, (buttonId, data) => {
+                 if (buttonId === 'enter') {
+                    const price = parseFloat(prompt("Enter price:"));
+                    if (!isNaN(price) && price > 0) {
+                        handleScan(price);
+                    } else {
+                        tg.showAlert('Please enter a valid number.');
+                    }
+                 }
+            });
+        });
+
         taxToggle.addEventListener('change', calculateGrandTotal);
         tipToggle.addEventListener('change', calculateGrandTotal);
         exportBtn.addEventListener('click', exportToCSV);
@@ -437,7 +456,6 @@
             tg.ready();
             tg.expand();
             
-            // Configure Main Button
             tg.MainButton.textColor = '#FFFFFF';
             tg.MainButton.color = '#26A5E4';
             tg.MainButton.hide();
